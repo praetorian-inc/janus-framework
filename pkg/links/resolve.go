@@ -6,7 +6,7 @@ import (
 	"github.com/praetorian-inc/janus-framework/pkg/chain"
 	"github.com/praetorian-inc/janus-framework/pkg/chain/cfg"
 	"github.com/praetorian-inc/janus-framework/pkg/types"
-	"github.com/praetorian-inc/janus/pkg/util"
+	"github.com/praetorian-inc/janus-framework/pkg/util"
 )
 
 type Resolve struct {

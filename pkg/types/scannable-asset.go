@@ -1,7 +1,7 @@
 package types
 
 import (
-	"github.com/praetorian-inc/janus/pkg/util"
+	"github.com/praetorian-inc/janus-framework/pkg/util"
 )
 
 type ScannableAsset struct {
