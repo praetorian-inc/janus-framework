@@ -144,15 +144,10 @@ func (ph *ParamHolder) deletePendingValue(param Param) {
 
 func (ph *ParamHolder) Arg(name string) any {
 	param, ok := ph.getParam(name)
-	if ok {
-		return param.Value()
+	if !ok {
+		return nil
 	}
-
-	if pendingArg, exists := ph.pending[name]; exists {
-		return pendingArg.Value
-	}
-
-	return nil
+	return param.Value()
 }
 
 func (ph *ParamHolder) Args() map[string]any {
