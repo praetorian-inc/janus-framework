@@ -291,7 +291,7 @@ func (c *BaseChain) resetParams() error {
 }
 
 func (c *BaseChain) startOutputter(outputter Outputter) error {
-	err := c.setAllArgs(outputter)
+	err := c.setOutputterArgs(outputter)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func (c *BaseChain) setArgs(paramable cfg.Paramable) error {
 	return nil
 }
 
-func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
+func (c *BaseChain) setOutputterArgs(paramable cfg.Paramable) error {
 	allArgs := make(map[string]any)
 
 	maps.Copy(allArgs, c.Args())
@@ -341,10 +341,8 @@ func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
 		}
 	}
 
-	// For outputters, dynamically declare parameters that don't exist
 	for key, arg := range allArgs {
 		if !paramable.HasParam(key) {
-			// Create parameter dynamically for this outputter based on the argument type
 			switch arg.(type) {
 			case string:
 				param := cfg.NewParam[string](key, "dynamically propagated parameter from chain/links")
