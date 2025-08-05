@@ -444,6 +444,55 @@ func TestChain_OutputtersBeforeConfigs(t *testing.T) {
 	os.Remove("test.json")
 }
 
+type TestUndeclaredParamOutputter struct {
+	*chain.BaseOutputter
+	paramValue *string
+}
+
+func (o *TestUndeclaredParamOutputter) Params() []cfg.Param {
+	return []cfg.Param{
+		cfg.NewParam[string]("declared-param", "a parameter this outputter declares"),
+	}
+}
+
+func (o *TestUndeclaredParamOutputter) Initialize() error {
+	// Access a parameter that this outputter didn't declare
+	if profile := o.Arg("profile"); profile != nil {
+		*o.paramValue = profile.(string)
+	}
+	return nil
+}
+
+func (o *TestUndeclaredParamOutputter) Output(any) error {
+	return nil
+}
+
+func NewTestUndeclaredParamOutputter(paramValue *string, configs ...cfg.Config) chain.Outputter {
+	o := &TestUndeclaredParamOutputter{paramValue: paramValue}
+	o.BaseOutputter = chain.NewBaseOutputter(o, configs...)
+	return o
+}
+
+func TestChain_OutputterReceivesUndeclaredParams(t *testing.T) {
+	receivedParam := ""
+
+	c := chain.NewChain(
+		basics.NewStrLink(),
+	).WithConfigs(
+		cfg.WithArg("profile", "test-profile"),
+		cfg.WithArg("declared-param", "test-value"),
+	).WithOutputters(
+		NewTestUndeclaredParamOutputter(&receivedParam),
+	)
+
+	c.Send("test")
+	c.Close()
+	c.Wait()
+
+	require.NoError(t, c.Error())
+	assert.Equal(t, "test-profile", receivedParam, "outputter should receive undeclared parameter from chain")
+}
+
 func TestChain_Hopper(t *testing.T) {
 	chain1 := chain.NewChain(
 		basics.NewInterfaceLink(),

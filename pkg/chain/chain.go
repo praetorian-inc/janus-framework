@@ -315,10 +315,11 @@ func (c *BaseChain) startChild(child Link, prevChan chan any, errHandler func(er
 
 func (c *BaseChain) setArgs(paramable cfg.Paramable) error {
 	for key, arg := range c.Args() {
-		expectsParam := paramable.HasParam(key)
 		hasArg := paramable.WasSet(key)
 
-		if expectsParam && !hasArg {
+		// Pass all parameters to all components, not just declared ones
+		// This enables dynamic parameter access for outputters and links
+		if !hasArg {
 			if err := paramable.SetArg(key, arg); err != nil {
 				return err
 			}
