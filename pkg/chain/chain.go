@@ -341,7 +341,29 @@ func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
 		}
 	}
 
+	// For outputters, dynamically declare parameters that don't exist
 	for key, arg := range allArgs {
+		if !paramable.HasParam(key) {
+			// Create parameter dynamically for this outputter based on the argument type
+			switch arg.(type) {
+			case string:
+				param := cfg.NewParam[string](key, "dynamically propagated parameter from chain/links")
+				if err := paramable.SetParams(param); err != nil {
+					return err
+				}
+			case int:
+				param := cfg.NewParam[int](key, "dynamically propagated parameter from chain/links")
+				if err := paramable.SetParams(param); err != nil {
+					return err
+				}
+			default:
+				param := cfg.NewParam[any](key, "dynamically propagated parameter from chain/links")
+				if err := paramable.SetParams(param); err != nil {
+					return err
+				}
+			}
+		}
+
 		if err := paramable.SetArg(key, arg); err != nil {
 			return err
 		}

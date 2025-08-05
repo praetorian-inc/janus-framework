@@ -9,7 +9,6 @@ type ProfileLink struct {
 	*chain.Base
 }
 
-// NewProfileLink is a test link that declares a profile parameter for testing parameter propagation
 func NewProfileLink(configs ...cfg.Config) chain.Link {
 	d := &ProfileLink{}
 	d.Base = chain.NewBase(d, configs...)

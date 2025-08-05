@@ -2,6 +2,7 @@ package chain_test
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -456,8 +457,9 @@ func (o *TestUndeclaredParamOutputter) Params() []cfg.Param {
 }
 
 func (o *TestUndeclaredParamOutputter) Initialize() error {
-	// Access a parameter that this outputter didn't declare
-	if profile := o.Arg("profile"); profile != nil {
+	if profile := o.Arg("profile"); profile == nil {
+		return fmt.Errorf("didn't receive profile")
+	} else {
 		*o.paramValue = profile.(string)
 	}
 	return nil
