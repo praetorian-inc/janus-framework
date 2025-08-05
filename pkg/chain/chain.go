@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"github.com/praetorian-inc/janus-framework/pkg/chain/cfg"
@@ -290,7 +291,7 @@ func (c *BaseChain) resetParams() error {
 }
 
 func (c *BaseChain) startOutputter(outputter Outputter) error {
-	err := c.setArgs(outputter)
+	err := c.setAllArgs(outputter)
 	if err != nil {
 		return err
 	}
@@ -315,10 +316,35 @@ func (c *BaseChain) startChild(child Link, prevChan chan any, errHandler func(er
 
 func (c *BaseChain) setArgs(paramable cfg.Paramable) error {
 	for key, arg := range c.Args() {
+		expectsParam := paramable.HasParam(key)
 		hasArg := paramable.WasSet(key)
 
-		// Pass all parameters to all components, not just declared ones
-		// This enables dynamic parameter access for outputters and links
+		if expectsParam && !hasArg {
+			if err := paramable.SetArg(key, arg); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
+	allArgs := make(map[string]any)
+
+	chainArgs := c.AllArgs()
+	maps.Copy(allArgs, chainArgs)
+
+	for _, link := range c.children() {
+		linkArgs := link.AllArgs()
+		for key, arg := range linkArgs {
+			if _, exists := allArgs[key]; !exists {
+				allArgs[key] = arg
+			}
+		}
+	}
+
+	for key, arg := range allArgs {
+		hasArg := paramable.WasSet(key)
 		if !hasArg {
 			if err := paramable.SetArg(key, arg); err != nil {
 				return err

@@ -15,6 +15,7 @@ type Paramable interface {
 	WasSet(string) bool
 	Arg(string) any
 	Args() map[string]any
+	AllArgs() map[string]any // Returns both declared and pending args
 	SetArg(string, any) error
 	SetArgsFromList(args []string) error
 }
@@ -156,6 +157,16 @@ func (ph *ParamHolder) Arg(name string) any {
 }
 
 func (ph *ParamHolder) Args() map[string]any {
+	args := map[string]any{}
+	for name, param := range ph.params {
+		if param.HasValue() {
+			args[name] = param.Value()
+		}
+	}
+	return args
+}
+
+func (ph *ParamHolder) AllArgs() map[string]any {
 	args := map[string]any{}
 
 	for name, param := range ph.params {
