@@ -331,12 +331,10 @@ func (c *BaseChain) setArgs(paramable cfg.Paramable) error {
 func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
 	allArgs := make(map[string]any)
 
-	chainArgs := c.AllArgs()
-	maps.Copy(allArgs, chainArgs)
+	maps.Copy(allArgs, c.Args())
 
 	for _, link := range c.children() {
-		linkArgs := link.AllArgs()
-		for key, arg := range linkArgs {
+		for key, arg := range link.Args() {
 			if _, exists := allArgs[key]; !exists {
 				allArgs[key] = arg
 			}
@@ -344,11 +342,8 @@ func (c *BaseChain) setAllArgs(paramable cfg.Paramable) error {
 	}
 
 	for key, arg := range allArgs {
-		hasArg := paramable.WasSet(key)
-		if !hasArg {
-			if err := paramable.SetArg(key, arg); err != nil {
-				return err
-			}
+		if err := paramable.SetArg(key, arg); err != nil {
+			return err
 		}
 	}
 	return nil

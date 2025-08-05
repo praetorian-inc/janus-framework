@@ -477,9 +477,8 @@ func TestChain_OutputterReceivesUndeclaredParams(t *testing.T) {
 	receivedParam := ""
 
 	c := chain.NewChain(
-		basics.NewStrLink(),
+		basics.NewProfileLink(cfg.WithArg("profile", "test-profile")),
 	).WithConfigs(
-		cfg.WithArg("profile", "test-profile"),
 		cfg.WithArg("declared-param", "test-value"),
 	).WithOutputters(
 		NewTestUndeclaredParamOutputter(&receivedParam),
