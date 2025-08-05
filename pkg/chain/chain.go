@@ -343,23 +343,8 @@ func (c *BaseChain) setOutputterArgs(paramable cfg.Paramable) error {
 
 	for key, arg := range allArgs {
 		if !paramable.HasParam(key) {
-			switch arg.(type) {
-			case string:
-				param := cfg.NewParam[string](key, "dynamically propagated parameter from chain/links")
-				if err := paramable.SetParams(param); err != nil {
-					return err
-				}
-			case int:
-				param := cfg.NewParam[int](key, "dynamically propagated parameter from chain/links")
-				if err := paramable.SetParams(param); err != nil {
-					return err
-				}
-			default:
-				param := cfg.NewParam[any](key, "dynamically propagated parameter from chain/links")
-				if err := paramable.SetParams(param); err != nil {
-					return err
-				}
-			}
+			param := c.Param(key)
+			paramable.SetParams(param)
 		}
 
 		if err := paramable.SetArg(key, arg); err != nil {
