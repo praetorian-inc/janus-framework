@@ -30,10 +30,14 @@ type Module struct {
 	inputParam   cfg.Param
 	autoRun      bool
 	err          error
+	*cfg.ParamHolder
 }
 
 func NewModule(metadata *cfg.Metadata) *Module {
-	return &Module{metadata: metadata}
+	return &Module{
+		metadata:    metadata,
+		ParamHolder: cfg.NewParamHolder(),
+	}
 }
 
 func (m *Module) WithLinks(constructors ...LinkConstructor) *Module {
@@ -60,6 +64,13 @@ func (m *Module) WithInputParam(param cfg.Param) *Module {
 // an inputParam value.
 func (m *Module) WithAutoRun() *Module {
 	m.autoRun = true
+	return m
+}
+
+func (m *Module) WithParams(params ...cfg.Param) *Module {
+	for _, param := range params {
+		m.SetParams(param)
+	}
 	return m
 }
 
@@ -126,10 +137,17 @@ func (m *Module) New() Chain {
 		outputters[i] = constructor()
 	}
 
+	moduleConfigs := m.configs
+	for key, arg := range m.Args() {
+		if arg != nil {
+			moduleConfigs = append(moduleConfigs, cfg.WithArg(key, arg))
+		}
+	}
+
 	c := NewChain(links...).
 		WithInputParam(m.inputParam).
 		WithOutputters(outputters...).
-		WithConfigs(m.configs...)
+		WithConfigs(moduleConfigs...)
 
 	m.err = c.Error()
 	return c
@@ -140,7 +158,29 @@ func (m *Module) Metadata() *cfg.Metadata {
 }
 
 func (m *Module) Params() []cfg.Param {
-	return m.New().Params()
+	// Include both module's own parameters and chain parameters
+	moduleParams := m.ParamHolder.Params()
+	chainParams := m.New().Params()
+
+	// Combine and deduplicate
+	seen := make(map[string]bool)
+	allParams := []cfg.Param{}
+
+	for _, param := range moduleParams {
+		if !seen[param.Identifier()] {
+			allParams = append(allParams, param)
+			seen[param.Identifier()] = true
+		}
+	}
+
+	for _, param := range chainParams {
+		if !seen[param.Identifier()] {
+			allParams = append(allParams, param)
+			seen[param.Identifier()] = true
+		}
+	}
+
+	return allParams
 }
 
 func (m *Module) Error() error {

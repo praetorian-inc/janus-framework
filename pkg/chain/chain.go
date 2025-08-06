@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"github.com/praetorian-inc/janus-framework/pkg/chain/cfg"
@@ -290,7 +291,7 @@ func (c *BaseChain) resetParams() error {
 }
 
 func (c *BaseChain) startOutputter(outputter Outputter) error {
-	err := c.setArgs(outputter)
+	err := c.setOutputterArgs(outputter)
 	if err != nil {
 		return err
 	}
@@ -322,6 +323,32 @@ func (c *BaseChain) setArgs(paramable cfg.Paramable) error {
 			if err := paramable.SetArg(key, arg); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (c *BaseChain) setOutputterArgs(paramable cfg.Paramable) error {
+	allArgs := make(map[string]any)
+
+	maps.Copy(allArgs, c.Args())
+
+	for _, link := range c.children() {
+		for key, arg := range link.Args() {
+			if _, exists := allArgs[key]; !exists {
+				allArgs[key] = arg
+			}
+		}
+	}
+
+	for key, arg := range allArgs {
+		if !paramable.HasParam(key) {
+			param := c.Param(key)
+			paramable.SetParams(param)
+		}
+
+		if err := paramable.SetArg(key, arg); err != nil {
+			return err
 		}
 	}
 	return nil
