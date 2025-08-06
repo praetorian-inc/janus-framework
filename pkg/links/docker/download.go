@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,11 +56,11 @@ type ManifestEntry struct {
 	Layers   []string `json:"Layers"`
 }
 
-// DockerDownloadLink downloads Docker images from a registry without requiring the Docker daemon 
+// DockerDownloadLink downloads Docker images from a registry without requiring the Docker daemon
 // and saves them as tar files.
 type DockerDownloadLink struct {
 	*chain.Base
-	outputTarFile string
+	outDir string
 }
 
 func NewDockerDownload(configs ...cfg.Config) chain.Link {
@@ -72,24 +71,25 @@ func NewDockerDownload(configs ...cfg.Config) chain.Link {
 
 func (dd *DockerDownloadLink) Params() []cfg.Param {
 	return []cfg.Param{
-		cfg.NewParam[string]("output", "Full path to the tar file to save the downloaded image").WithDefault(""),
+		cfg.NewParam[string]("output", "output directory to save images to"),
 	}
 }
 
 func (dd *DockerDownloadLink) Initialize() error {
-	var err error
-	dd.outputTarFile, err = cfg.As[string](dd.Arg("output"))
+	dir, err := cfg.As[string](dd.Arg("output"))
 	if err != nil {
-		return fmt.Errorf("failed to get output tar file path: %w", err)
+		return err
 	}
 
-	if dd.outputTarFile == "" {
-		tempDir, err := os.MkdirTemp("", "docker-download-*")
-		if err != nil {
-			return fmt.Errorf("failed to create temp directory: %w", err)
-		}
-		dd.outputTarFile = filepath.Join(tempDir, "image.tar")
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), ".janus-docker-images")
 	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	dd.outDir = dir
 
 	return nil
 }
@@ -99,12 +99,17 @@ func (dd *DockerDownloadLink) Process(dockerImage *types.DockerImage) error {
 		return fmt.Errorf("Docker image name is required")
 	}
 
-	slog.Info("downloading Docker image", "image", dockerImage.Image, "output", dd.outputTarFile)
-	if err := dd.downloadImage(dockerImage.Image, dd.outputTarFile); err != nil {
+	outFile, err := createOutputFile(dd.outDir, dockerImage.Image)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	if err := dd.downloadImage(dockerImage.Image, outFile.Name()); err != nil {
 		return fmt.Errorf("failed to download image %s: %w", dockerImage.Image, err)
 	}
 
-	dockerImage.LocalPath = dd.outputTarFile
+	dockerImage.LocalPath = outFile.Name()
 	return dd.Send(dockerImage)
 }
 

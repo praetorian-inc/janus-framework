@@ -71,7 +71,7 @@ func (dsl *DockerSave) Process(imageContext types.DockerImage) error {
 
 	defer removeImage(dsl.Context(), dockerClient, imageID)
 
-	outFile, err := dsl.createOutputFile(imageID)
+	outFile, err := createOutputFile(dsl.outDir, imageID)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -90,17 +90,4 @@ func (dsl *DockerSave) Process(imageContext types.DockerImage) error {
 	imageContext.LocalPath = outFile.Name()
 
 	return dsl.Send(&imageContext)
-}
-
-func (dsl *DockerSave) createOutputFile(imageID string) (*os.File, error) {
-	parts := strings.Split(imageID, "/")
-	imageName := strings.Replace(parts[len(parts)-1], ":", "-", -1)
-
-	outputPath := filepath.Join(dsl.outDir, imageName+".tar")
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create output file: %w", err)
-	}
-
-	return outFile, nil
 }
