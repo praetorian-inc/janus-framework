@@ -2,6 +2,8 @@ package types
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -130,6 +132,13 @@ func (i *DockerImage) extractFileName(header *tar.Header, manifest []DockerManif
 				break
 			}
 		}
+
+		if header.Name == m.Config {
+			isLayer = false
+			layerName = m.Config
+			break
+		}
+
 		if isLayer {
 			break
 		}
@@ -139,7 +148,14 @@ func (i *DockerImage) extractFileName(header *tar.Header, manifest []DockerManif
 }
 
 func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, manifest []DockerManifest) ([]NPInput, error) {
-	layerReader := tar.NewReader(tarReader)
+	layerReader, cleanup, err := i.getLayerReader(tarReader, layerName)
+	if err != nil {
+		return nil, err
+	}
+	if layerReader == nil {
+		return []NPInput{}, nil // Empty layer
+	}
+	defer cleanup()
 
 	npInputs := []NPInput{}
 	for {
@@ -182,9 +198,46 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, mani
 	return npInputs, nil
 }
 
+// getLayerReader creates the appropriate reader for a Docker layer, handling both gzipped and uncompressed layers.
+// It returns a cleanup function that should be called to close the reader.
+func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*tar.Reader, func() error, error) {
+	var cleanup func() error = func() error { return nil }
+
+	// Read just the first few bytes to detect gzip compression
+	header := make([]byte, 2)
+	n, err := tarReader.Read(header)
+	if err != nil {
+		return nil, cleanup, fmt.Errorf("failed to read layer header for %s: %w", layerName, err)
+	}
+	if n == 0 {
+		slog.Debug("empty layer", "layer", layerName)
+		return nil, cleanup, nil
+	}
+
+	// Create a reader that starts with the header bytes we already read,
+	// followed by the rest of the tar entry
+	headerReader := bytes.NewReader(header[:n])
+	combinedReader := io.MultiReader(headerReader, tarReader)
+
+	var layerReader io.Reader
+
+	// Gzip magic bytes are 0x1f, 0x8b
+	if n >= 2 && header[0] == 0x1f && header[1] == 0x8b {
+		gzipReader, err := gzip.NewReader(combinedReader)
+		if err != nil {
+			return nil, cleanup, fmt.Errorf("failed to create gzip reader for layer %s: %w", layerName, err)
+		}
+		layerReader = gzipReader
+		cleanup = gzipReader.Close
+	} else {
+		layerReader = combinedReader
+	}
+
+	return tar.NewReader(layerReader), cleanup, nil
+}
+
 func (i *DockerImage) processFile(tarReader *tar.Reader, layerName string, manifest []DockerManifest) ([]NPInput, error) {
-	layerReader := tar.NewReader(tarReader)
-	content, err := io.ReadAll(layerReader)
+	content, err := io.ReadAll(tarReader)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed reading file %s: %w", layerName, err)
