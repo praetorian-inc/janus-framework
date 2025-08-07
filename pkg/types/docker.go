@@ -236,15 +236,15 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	return tar.NewReader(layerReader), cleanup, nil
 }
 
-func (i *DockerImage) processFile(tarReader *tar.Reader, layerName string, manifest []DockerManifest) ([]NPInput, error) {
+func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manifest []DockerManifest) ([]NPInput, error) {
 	content, err := io.ReadAll(tarReader)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed reading file %s: %w", layerName, err)
+		return nil, fmt.Errorf("failed reading file %s: %w", fileName, err)
 	}
 
 	if len(content) == 0 {
-		return nil, fmt.Errorf("file %q is empty", layerName)
+		return nil, fmt.Errorf("file %q is empty", fileName)
 	}
 
 	input := NPInput{
@@ -253,7 +253,7 @@ func (i *DockerImage) processFile(tarReader *tar.Reader, layerName string, manif
 			Platform:     "docker",
 			ResourceType: "image",
 			ResourceID:   manifest[0].RepoTags[0],
-			Region:       fmt.Sprintf("file:%s", layerName),
+			Region:       fmt.Sprintf("file:%s", fileName),
 		},
 	}
 
