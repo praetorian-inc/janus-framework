@@ -107,7 +107,7 @@ func (dd *DockerDownloadLink) Process(dockerImage *types.DockerImage) error {
 	}
 	defer outFile.Close()
 
-	if err := dd.downloadImage(dockerImage, outFile.Name()); err != nil {
+	if err := dd.downloadImage(dockerImage, outFile); err != nil {
 		return fmt.Errorf("failed to download image %s: %w", dockerImage.Image, err)
 	}
 
@@ -123,7 +123,7 @@ func (dd *DockerDownloadLink) getRegistryBase(dockerImage *types.DockerImage) st
 }
 
 // This is an adapted version of https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
-func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outputTarFile string) error {
+func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outputTarFile *os.File) error {
 	imageName, tag := dd.parseImageName(dockerImage.Image)
 
 	// Image components will be downloaded here before being added to a tar file
@@ -540,13 +540,7 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 	return manifestEntry, nil
 }
 
-func (dd *DockerDownloadLink) createTarFile(sourceDir, outputTarFile string) error {
-	tarFile, err := os.Create(outputTarFile)
-	if err != nil {
-		return fmt.Errorf("failed to create tar file: %w", err)
-	}
-	defer tarFile.Close()
-
+func (dd *DockerDownloadLink) createTarFile(sourceDir string, tarFile *os.File) error {
 	tarWriter := tar.NewWriter(tarFile)
 	defer tarWriter.Close()
 
