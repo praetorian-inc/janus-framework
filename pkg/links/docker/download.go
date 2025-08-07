@@ -72,7 +72,7 @@ func NewDockerDownload(configs ...cfg.Config) chain.Link {
 
 func (dd *DockerDownloadLink) Params() []cfg.Param {
 	return []cfg.Param{
-		cfg.NewParam[string]("output", "output directory to save images to"),
+		cfg.NewParam[string]("output", "output directory to download images to").WithDefault("docker-download"),
 	}
 }
 
@@ -82,16 +82,11 @@ func (dd *DockerDownloadLink) Initialize() error {
 		return err
 	}
 
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), ".janus-docker-images")
-	}
-
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	dd.outDir = dir
-
 	return nil
 }
 
