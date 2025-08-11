@@ -72,7 +72,9 @@ func NewDockerDownload(configs ...cfg.Config) chain.Link {
 
 func (dd *DockerDownloadLink) Params() []cfg.Param {
 	return []cfg.Param{
-		cfg.NewParam[string]("output", "output directory to download images to").WithDefault("docker-download"),
+		cfg.NewParam[string]("output", "output directory").
+			WithShortcode("o").
+			WithDefault("docker-output"),
 	}
 }
 
