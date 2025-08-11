@@ -22,39 +22,6 @@ import (
 
 const defaultRegistryBase = "https://registry-1.docker.io"
 
-type AuthResponse struct {
-	Token string `json:"token"`
-}
-
-type ManifestV2 struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	MediaType     string `json:"mediaType"`
-	Config        struct {
-		Digest string `json:"digest"`
-	} `json:"config"`
-	Layers []struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-	} `json:"layers"`
-}
-
-type ManifestList struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	MediaType     string `json:"mediaType"`
-	Manifests     []struct {
-		Digest   string `json:"digest"`
-		Platform struct {
-			Architecture string `json:"architecture"`
-		} `json:"platform"`
-	} `json:"manifests"`
-}
-
-type ManifestEntry struct {
-	Config   string   `json:"Config"`
-	RepoTags []string `json:"RepoTags"`
-	Layers   []string `json:"Layers"`
-}
-
 // DockerDownloadLink downloads Docker images from a registry without requiring the Docker daemon
 // and saves them as tar files.
 type DockerDownloadLink struct {
@@ -74,7 +41,7 @@ func (dd *DockerDownloadLink) Params() []cfg.Param {
 	return []cfg.Param{
 		cfg.NewParam[string]("output", "output directory").
 			WithShortcode("o").
-			WithDefault("docker-output"),
+			WithDefault("docker-images"),
 	}
 }
 
@@ -148,7 +115,7 @@ func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outp
 		return err
 	}
 
-	var manifestEntry ManifestEntry
+	var manifestEntry RegistryManifestEntry
 
 	switch baseManifest.SchemaVersion {
 	case 2:
@@ -160,7 +127,7 @@ func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outp
 			}
 
 		case "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json":
-			var manifestList ManifestList
+			var manifestList RegistryManifestList
 			if err := json.Unmarshal(manifestData, &manifestList); err != nil {
 				return err
 			}
@@ -199,7 +166,7 @@ func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outp
 	}
 	defer file.Close()
 
-	if err := json.NewEncoder(file).Encode([]ManifestEntry{manifestEntry}); err != nil {
+	if err := json.NewEncoder(file).Encode([]RegistryManifestEntry{manifestEntry}); err != nil {
 		return err
 	}
 
@@ -343,7 +310,7 @@ func (dd *DockerDownloadLink) getTokenFromAuthEndpoint(authURL string, dockerIma
 		return "", fmt.Errorf("HTTP %d: failed to get token from auth endpoint", resp.StatusCode)
 	}
 
-	var authResp AuthResponse
+	var authResp RegistryAuthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
 		return "", err
 	}
@@ -475,10 +442,10 @@ func (dd *DockerDownloadLink) getManifest(image, digest string) ([]byte, error) 
 	return body, nil
 }
 
-func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image, tag, outputDir string) (ManifestEntry, error) {
-	var manifest ManifestV2
+func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image, tag, outputDir string) (RegistryManifestEntry, error) {
+	var manifest RegistryManifestV2
 	if err := json.Unmarshal(manifestJson, &manifest); err != nil {
-		return ManifestEntry{}, err
+		return RegistryManifestEntry{}, err
 	}
 
 	// Download config
@@ -487,7 +454,7 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 	configFile := imageId + ".json"
 
 	if err := dd.fetchBlob(image, configDigest, filepath.Join(outputDir, configFile)); err != nil {
-		return ManifestEntry{}, err
+		return RegistryManifestEntry{}, err
 	}
 
 	var layerFiles []string
@@ -503,7 +470,7 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 
 		layerDir := filepath.Join(outputDir, layerId)
 		if err := os.MkdirAll(layerDir, 0755); err != nil {
-			return ManifestEntry{}, err
+			return RegistryManifestEntry{}, err
 		}
 
 		// Download layer data
@@ -518,17 +485,17 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 			}
 
 			if err := dd.fetchBlob(image, layer.Digest, layerPath); err != nil {
-				return ManifestEntry{}, err
+				return RegistryManifestEntry{}, err
 			}
 
 		default:
-			return ManifestEntry{}, fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
+			return RegistryManifestEntry{}, fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
 		}
 	}
 
 	// Create manifest entry
 	repoTag := strings.TrimPrefix(image, "library/") + ":" + tag
-	manifestEntry := ManifestEntry{
+	manifestEntry := RegistryManifestEntry{
 		Config:   configFile,
 		RepoTags: []string{repoTag},
 		Layers:   layerFiles,
