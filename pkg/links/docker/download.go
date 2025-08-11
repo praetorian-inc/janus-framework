@@ -20,8 +20,6 @@ import (
 	"github.com/praetorian-inc/janus-framework/pkg/types"
 )
 
-const defaultRegistryBase = "https://registry-1.docker.io"
-
 // DockerDownloadLink downloads Docker images from a registry without requiring the Docker daemon
 // and saves them as tar files.
 type DockerDownloadLink struct {
@@ -77,13 +75,6 @@ func (dd *DockerDownloadLink) Process(dockerImage *types.DockerImage) error {
 
 	dockerImage.LocalPath = outFile.Name()
 	return dd.Send(dockerImage)
-}
-
-func (dd *DockerDownloadLink) getRegistryBase(dockerImage *types.DockerImage) string {
-	if dockerImage.AuthConfig.ServerAddress != "" {
-		return dockerImage.AuthConfig.ServerAddress
-	}
-	return defaultRegistryBase
 }
 
 // This is an adapted version of https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
@@ -252,13 +243,28 @@ func (dd *DockerDownloadLink) refreshToken(dockerImage *types.DockerImage) error
 	return fmt.Errorf("unexpected status code %d", resp.StatusCode)
 }
 
+const defaultRegistryBase = "https://registry-1.docker.io"
+
+func (dd *DockerDownloadLink) getRegistryBase(dockerImage *types.DockerImage) string {
+	if dockerImage.AuthConfig.ServerAddress != "" {
+		return dockerImage.AuthConfig.ServerAddress
+	}
+	return defaultRegistryBase
+}
+
+const (
+	realmRegex   = regexp.MustCompile(`realm="([^"]+)"`)
+	serviceRegex = regexp.MustCompile(`service="([^"]+)"`)
+	scopeRegex   = regexp.MustCompile(`scope="([^"]+)"`)
+)
+
 // Parse the WWW-Authenticate header and returns the auth endpoint.
 func (dd *DockerDownloadLink) parseWWWAuthenticate(wwwAuth, image string) (string, error) {
 	// The format of the WWW-Authenticate header is from the OAuth 2.0 spec.
 	// Bearer realm="<url>",service="<service>",scope="<scope>"
 
 	// The realm is required to get the auth endpoint.
-	realmMatch := regexp.MustCompile(`realm="([^"]+)"`).FindStringSubmatch(wwwAuth)
+	realmMatch := realmRegex.FindStringSubmatch(wwwAuth)
 	if len(realmMatch) < 2 {
 		return "", fmt.Errorf("could not parse realm from WWW-Authenticate: %s", wwwAuth)
 	}
@@ -266,8 +272,8 @@ func (dd *DockerDownloadLink) parseWWWAuthenticate(wwwAuth, image string) (strin
 	authURL := realmMatch[1]
 
 	// The service and scope are optional.
-	serviceMatch := regexp.MustCompile(`service="([^"]+)"`).FindStringSubmatch(wwwAuth)
-	scopeMatch := regexp.MustCompile(`scope="([^"]+)"`).FindStringSubmatch(wwwAuth)
+	serviceMatch := serviceRegex.FindStringSubmatch(wwwAuth)
+	scopeMatch := scopeRegex.FindStringSubmatch(wwwAuth)
 
 	params := make([]string, 0)
 	if len(serviceMatch) >= 2 {
@@ -318,6 +324,42 @@ func (dd *DockerDownloadLink) getTokenFromAuthEndpoint(authURL string, dockerIma
 	return authResp.Token, nil
 }
 
+func (dd *DockerDownloadLink) getManifest(image, digest string) ([]byte, error) {
+	registryBase := dd.getRegistryBase(dd.dockerImage)
+	url := fmt.Sprintf("%s/v2/%s/manifests/%s", registryBase, image, digest)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if dd.token != "" {
+		req.Header.Set("Authorization", "Bearer "+dd.token)
+	}
+	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	req.Header.Add("Accept", "application/vnd.oci.image.index.v1+json")
+	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.list.v2+json")
+	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v1+json")
+
+	resp, err := dd.doRequestWithRetry(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: failed to get manifest for %s", resp.StatusCode, image)
+	}
+
+	return body, nil
+}
+
 // doRequestWithRetry performs an HTTP request with automatic token refresh and retry logic.
 // If a 401 is received, it attempts to refresh the token and retry once.
 // If the retry also fails with 401, it returns an auth error.
@@ -357,89 +399,6 @@ func (dd *DockerDownloadLink) doRequestWithRetry(req *http.Request) (*http.Respo
 	}
 
 	return resp, nil
-}
-
-func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error {
-	registryBase := dd.getRegistryBase(dd.dockerImage)
-	url := fmt.Sprintf("%s/v2/%s/blobs/%s", registryBase, image, digest)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return err
-	}
-	if dd.token != "" {
-		req.Header.Set("Authorization", "Bearer "+dd.token)
-	}
-
-	resp, err := dd.doRequestWithRetry(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Handle redirects (status 3xx)
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return fmt.Errorf("redirect without location header")
-		}
-
-		resp2, err := http.Get(location)
-		if err != nil {
-			return err
-		}
-		defer resp2.Body.Close()
-		resp = resp2
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: failed to fetch blob", resp.StatusCode)
-	}
-
-	file, err := os.Create(targetFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	_, err = io.Copy(file, resp.Body)
-	return err
-}
-
-func (dd *DockerDownloadLink) getManifest(image, digest string) ([]byte, error) {
-	registryBase := dd.getRegistryBase(dd.dockerImage)
-	url := fmt.Sprintf("%s/v2/%s/manifests/%s", registryBase, image, digest)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if dd.token != "" {
-		req.Header.Set("Authorization", "Bearer "+dd.token)
-	}
-	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
-	req.Header.Add("Accept", "application/vnd.oci.image.index.v1+json")
-	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
-	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.list.v2+json")
-	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v1+json")
-
-	resp, err := dd.doRequestWithRetry(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: failed to get manifest for %s", resp.StatusCode, image)
-	}
-
-	return body, nil
 }
 
 func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image, tag, outputDir string) (RegistryManifestEntry, error) {
@@ -502,6 +461,53 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 	}
 
 	return manifestEntry, nil
+}
+
+func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error {
+	registryBase := dd.getRegistryBase(dd.dockerImage)
+	url := fmt.Sprintf("%s/v2/%s/blobs/%s", registryBase, image, digest)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	if dd.token != "" {
+		req.Header.Set("Authorization", "Bearer "+dd.token)
+	}
+
+	resp, err := dd.doRequestWithRetry(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Handle redirects (status 3xx)
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		location := resp.Header.Get("Location")
+		if location == "" {
+			return fmt.Errorf("redirect without location header")
+		}
+
+		resp2, err := http.Get(location)
+		if err != nil {
+			return err
+		}
+		defer resp2.Body.Close()
+		resp = resp2
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: failed to fetch blob", resp.StatusCode)
+	}
+
+	file, err := os.Create(targetFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	return err
 }
 
 func (dd *DockerDownloadLink) createTarFile(sourceDir string, tarFile *os.File) error {
