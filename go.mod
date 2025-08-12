@@ -6,7 +6,7 @@ require (
 	github.com/docker/docker v28.0.1+incompatible
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/lmittmann/tint v1.1.2
-	github.com/praetorian-inc/tabularium v1.0.1-main
+	github.com/praetorian-inc/tabularium v1.0.7-pre-prod
 	github.com/stretchr/testify v1.10.0
 )
 
