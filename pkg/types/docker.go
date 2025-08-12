@@ -203,26 +203,23 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, mani
 func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*tar.Reader, func() error, error) {
 	var cleanup func() error = func() error { return nil }
 
-	// Read just the first few bytes to detect gzip compression
-	header := make([]byte, 2)
-	n, err := tarReader.Read(header)
+	magicBytes, err := i.extractMagicBytes(tarReader, 2)
 	if err != nil {
-		return nil, cleanup, fmt.Errorf("failed to read layer header for %s: %w", layerName, err)
+		return nil, cleanup, err
 	}
-	if n == 0 {
+	if len(magicBytes) == 0 {
 		slog.Debug("empty layer", "layer", layerName)
 		return nil, cleanup, nil
 	}
 
 	// Create a reader that starts with the header bytes we already read,
 	// followed by the rest of the tar entry
-	headerReader := bytes.NewReader(header[:n])
+	headerReader := bytes.NewReader(magicBytes)
 	combinedReader := io.MultiReader(headerReader, tarReader)
 
 	var layerReader io.Reader
 
-	// Gzip magic bytes are 0x1f, 0x8b
-	if n >= 2 && header[0] == 0x1f && header[1] == 0x8b {
+	if isGzip(magicBytes) {
 		gzipReader, err := gzip.NewReader(combinedReader)
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("failed to create gzip reader for layer %s: %w", layerName, err)
@@ -234,6 +231,22 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	}
 
 	return tar.NewReader(layerReader), cleanup, nil
+}
+
+func (i *DockerImage) extractMagicBytes(tarReader *tar.Reader, numBytes int) ([]byte, error) {
+	magicBytes := make([]byte, numBytes)
+	n, err := tarReader.Read(magicBytes)
+	if err != nil {
+		return []byte{}, fmt.Errorf("failed to read header: %w", err)
+	}
+
+	return magicBytes[:n], nil
+}
+
+var gzipMagicBytes = []byte{0x1f, 0x8b}
+
+func isGzip(magicBytes []byte) bool {
+	return len(magicBytes) >= 2 && bytes.Equal(magicBytes[:2], gzipMagicBytes)
 }
 
 func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manifest []DockerManifest) ([]NPInput, error) {
