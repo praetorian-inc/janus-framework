@@ -500,21 +500,6 @@ func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error 
 	}
 	defer resp.Body.Close()
 
-	// Handle redirects (status 3xx)
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return fmt.Errorf("redirect without location header")
-		}
-
-		resp2, err := http.Get(location)
-		if err != nil {
-			return err
-		}
-		defer resp2.Body.Close()
-		resp = resp2
-	}
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d: failed to fetch blob", resp.StatusCode)
 	}
