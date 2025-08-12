@@ -2,7 +2,6 @@ package docker
 
 import (
 	"archive/tar"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -97,67 +96,7 @@ func (dd *DockerDownloadLink) downloadImage(dockerImage *types.DockerImage, outp
 		return err
 	}
 
-	var baseManifest struct {
-		SchemaVersion int    `json:"schemaVersion"`
-		MediaType     string `json:"mediaType"`
-	}
-
-	if err := json.Unmarshal(manifestData, &baseManifest); err != nil {
-		return err
-	}
-
-	var manifestEntry RegistryManifestEntry
-
-	switch baseManifest.SchemaVersion {
-	case 2:
-		switch baseManifest.MediaType {
-		case "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json":
-			manifestEntry, err = dd.handleSingleManifestV2(manifestData, imageName, tag, tempDir)
-			if err != nil {
-				return err
-			}
-
-		case "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json":
-			var manifestList RegistryManifestList
-			if err := json.Unmarshal(manifestData, &manifestList); err != nil {
-				return err
-			}
-
-			for _, manifest := range manifestList.Manifests {
-				if manifest.Platform.Architecture == runtime.GOARCH {
-					subManifestData, err := dd.getManifest(imageName, manifest.Digest)
-					if err != nil {
-						return err
-					}
-
-					manifestEntry, err = dd.handleSingleManifestV2(subManifestData, imageName, tag, tempDir)
-					if err != nil {
-						return err
-					}
-					break
-				}
-			}
-
-			if manifestEntry.Config == "" {
-				return fmt.Errorf("manifest for %s not found", runtime.GOARCH)
-			}
-
-		default:
-			return fmt.Errorf("unknown manifest mediaType: %s", baseManifest.MediaType)
-		}
-
-	default:
-		return fmt.Errorf("unsupported schema version: %d", baseManifest.SchemaVersion)
-	}
-
-	manifestFile := filepath.Join(tempDir, "manifest.json")
-	file, err := os.Create(manifestFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	if err := json.NewEncoder(file).Encode([]RegistryManifestEntry{manifestEntry}); err != nil {
+	if err := dd.downloadImageFromManifest(manifestData, imageName, tag, tempDir); err != nil {
 		return err
 	}
 
@@ -177,6 +116,11 @@ func (dd *DockerDownloadLink) parseImageName(imageWithTag string) (string, strin
 	// Official images need the library prefix
 	if !strings.Contains(image, "/") {
 		image = "library/" + image
+	}
+
+	// Handle a registry URL being part of the image name (e.g. <url>/<org>/<name>)
+	if parts := strings.SplitN(image, "/", 3); len(parts) >= 3 {
+		image = fmt.Sprintf("%s/%s", parts[1], parts[2])
 	}
 
 	return image, tag
@@ -206,31 +150,12 @@ func (dd *DockerDownloadLink) refreshToken(dockerImage *types.DockerImage) error
 	// We expect a 401 with WWW-Authenticate header to tell us how to authenticate to the registry
 	// if a token is required.
 	if resp.StatusCode == http.StatusUnauthorized {
-		wwwAuth := resp.Header.Get("WWW-Authenticate")
-		if wwwAuth == "" {
-			return fmt.Errorf("401 response without WWW-Authenticate header")
-		}
-
-		authURL, err := dd.parseWWWAuthenticate(wwwAuth, imageName)
-		if err != nil {
-			return fmt.Errorf("failed to parse WWW-Authenticate header: %w", err)
-		}
-
-		if dockerImage.AuthConfig.Username != "" && dockerImage.AuthConfig.Password != "" {
-			token, err := dd.getTokenFromAuthEndpoint(authURL, dockerImage, true)
-			if err != nil {
-				return err
-			}
-
-			dd.token = token
-			return nil
-		}
-
-		// No credentials provided, try anonymous access.
-		token, err := dd.getTokenFromAuthEndpoint(authURL, dockerImage, false)
+		wwwAuthHeader := resp.Header.Get("WWW-Authenticate")
+		token, err := dd.getTokenUsingAuthHeader(dockerImage, wwwAuthHeader)
 		if err != nil {
 			return fmt.Errorf("failed to get token for %s: %w", imageName, err)
 		}
+
 		dd.token = token
 		return nil
 	}
@@ -240,7 +165,7 @@ func (dd *DockerDownloadLink) refreshToken(dockerImage *types.DockerImage) error
 		return nil
 	}
 
-	return fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	return fmt.Errorf("unexpected status code %d, %s", resp.StatusCode, url)
 }
 
 const defaultRegistryBase = "https://registry-1.docker.io"
@@ -252,7 +177,26 @@ func (dd *DockerDownloadLink) getRegistryBase(dockerImage *types.DockerImage) st
 	return defaultRegistryBase
 }
 
-const (
+func (dd *DockerDownloadLink) getTokenUsingAuthHeader(dockerImage *types.DockerImage, wwwAuthHeader string) (string, error) {
+	if wwwAuthHeader == "" {
+		return "", fmt.Errorf("no WWW-Authenticate header")
+	}
+
+	imageName, _ := dd.parseImageName(dockerImage.Image)
+	authURL, err := dd.parseWWWAuthenticate(wwwAuthHeader, imageName)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse WWW-Authenticate header: %w", err)
+	}
+
+	if dockerImage.AuthConfig.Username != "" && dockerImage.AuthConfig.Password != "" {
+		return dd.getTokenFromAuthEndpoint(authURL, dockerImage, true)
+	}
+
+	// No credentials provided, try anonymous access.
+	return dd.getTokenFromAuthEndpoint(authURL, dockerImage, false)
+}
+
+var (
 	realmRegex   = regexp.MustCompile(`realm="([^"]+)"`)
 	serviceRegex = regexp.MustCompile(`service="([^"]+)"`)
 	scopeRegex   = regexp.MustCompile(`scope="([^"]+)"`)
@@ -371,7 +315,7 @@ func (dd *DockerDownloadLink) doRequestWithRetry(req *http.Request) (*http.Respo
 
 	// If we get a 401, try to refresh the token and retry once
 	if resp.StatusCode == http.StatusUnauthorized {
-		resp.Body.Close() // Close the first response
+		resp.Body.Close()
 
 		slog.Debug("unauthorized, attempting to refresh token")
 		if err := dd.refreshToken(dd.dockerImage); err != nil {
@@ -401,6 +345,50 @@ func (dd *DockerDownloadLink) doRequestWithRetry(req *http.Request) (*http.Respo
 	return resp, nil
 }
 
+func (dd *DockerDownloadLink) downloadImageFromManifest(manifestData []byte, imageName, tag, outputDir string) error {
+	var baseManifest struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		MediaType     string `json:"mediaType"`
+	}
+
+	if err := json.Unmarshal(manifestData, &baseManifest); err != nil {
+		return err
+	}
+
+	if baseManifest.SchemaVersion != 2 {
+		return fmt.Errorf("unsupported schema version: %d", baseManifest.SchemaVersion)
+	}
+
+	var manifestEntry RegistryManifestEntry
+	var err error
+
+	switch baseManifest.MediaType {
+	case "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json":
+		manifestEntry, err = dd.handleSingleManifestV2(manifestData, imageName, tag, outputDir)
+		if err != nil {
+			return err
+		}
+
+	case "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json":
+		manifestEntry, err = dd.handleMultipleManifestV2(manifestData, imageName, tag, outputDir)
+		if err != nil {
+			return err
+		}
+
+	default:
+		return fmt.Errorf("unknown manifest mediaType: %s", baseManifest.MediaType)
+	}
+
+	manifestFile := filepath.Join(outputDir, "manifest.json")
+	file, err := os.Create(manifestFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return json.NewEncoder(file).Encode([]RegistryManifestEntry{manifestEntry})
+}
+
 func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image, tag, outputDir string) (RegistryManifestEntry, error) {
 	var manifest RegistryManifestV2
 	if err := json.Unmarshal(manifestJson, &manifest); err != nil {
@@ -420,36 +408,13 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 	var layerId string
 
 	for _, layer := range manifest.Layers {
-		parentId := layerId
-
-		// Create fake layer ID
-		h := sha256.New()
-		h.Write([]byte(parentId + "\n" + layer.Digest))
-		layerId = fmt.Sprintf("%x", h.Sum(nil))
-
-		layerDir := filepath.Join(outputDir, layerId)
-		if err := os.MkdirAll(layerDir, 0755); err != nil {
-			return RegistryManifestEntry{}, err
+		newLayerId, layerTar, err := dd.downloadLayer(layer, layerId, image, outputDir)
+		if err != nil {
+			return RegistryManifestEntry{}, fmt.Errorf("failed to download layer: %w", err)
 		}
 
-		// Download layer data
-		switch layer.MediaType {
-		case "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip":
-			layerTar := filepath.Join(layerId, "layer.tar")
-			layerFiles = append(layerFiles, layerTar)
-
-			layerPath := filepath.Join(outputDir, layerTar)
-			if _, err := os.Stat(layerPath); err == nil {
-				continue
-			}
-
-			if err := dd.fetchBlob(image, layer.Digest, layerPath); err != nil {
-				return RegistryManifestEntry{}, err
-			}
-
-		default:
-			return RegistryManifestEntry{}, fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
-		}
+		layerId = newLayerId
+		layerFiles = append(layerFiles, layerTar)
 	}
 
 	// Create manifest entry
@@ -462,6 +427,60 @@ func (dd *DockerDownloadLink) handleSingleManifestV2(manifestJson []byte, image,
 
 	return manifestEntry, nil
 }
+
+func (dd *DockerDownloadLink) downloadLayer(layer RegistryLayer, parentId, image, outputDir string) (string, string, error) {
+	// Create a fake layer ID
+	layerId := layer.createIdFromParent(parentId)
+
+	// Download layer data
+	if layer.MediaType != "application/vnd.oci.image.layer.v1.tar+gzip" && layer.MediaType != "application/vnd.docker.image.rootfs.diff.tar.gzip" {
+		return layerId, "", fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
+	}
+
+	layerTar := fmt.Sprintf("%s.tar", layerId)
+	layerPath := filepath.Join(outputDir, layerTar)
+	if _, err := os.Stat(layerPath); err == nil {
+		return layerId, layerTar, nil
+	}
+
+	return layerId, layerTar, dd.fetchBlob(image, layer.Digest, layerPath)
+}
+
+func (dd *DockerDownloadLink) handleMultipleManifestV2(manifestData []byte, imageName, tag, outputDir string) (RegistryManifestEntry, error) {
+	var manifestList RegistryManifestList
+	if err := json.Unmarshal(manifestData, &manifestList); err != nil {
+		return RegistryManifestEntry{}, err
+	}
+
+	var manifestEntry RegistryManifestEntry
+
+	// Search through all manifests for the one matching our architecture
+	for _, manifest := range manifestList.Manifests {
+		if manifest.Platform.Architecture != runtime.GOARCH {
+			continue
+		}
+
+		subManifestData, err := dd.getManifest(imageName, manifest.Digest)
+		if err != nil {
+			return RegistryManifestEntry{}, err
+		}
+
+		manifestEntry, err = dd.handleSingleManifestV2(subManifestData, imageName, tag, outputDir)
+		if err != nil {
+			return RegistryManifestEntry{}, err
+		}
+
+		break
+	}
+
+	if manifestEntry.Config == "" {
+		return RegistryManifestEntry{}, fmt.Errorf("manifest for %s not found", runtime.GOARCH)
+	}
+
+	return manifestEntry, nil
+}
+
+
 
 func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error {
 	registryBase := dd.getRegistryBase(dd.dockerImage)
@@ -534,16 +553,18 @@ func (dd *DockerDownloadLink) createTarFile(sourceDir string, tarFile *os.File) 
 			return fmt.Errorf("failed to write tar header: %w", err)
 		}
 
-		if !info.IsDir() {
-			file, err := os.Open(path)
-			if err != nil {
-				return fmt.Errorf("failed to open file %s: %w", path, err)
-			}
-			defer file.Close()
+		if info.IsDir() {
+			return nil
+		}
 
-			if _, err := io.Copy(tarWriter, file); err != nil {
-				return fmt.Errorf("failed to copy file content to tar: %w", err)
-			}
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("failed to open file %s: %w", path, err)
+		}
+		defer file.Close()
+
+		if _, err := io.Copy(tarWriter, file); err != nil {
+			return fmt.Errorf("failed to copy file content to tar: %w", err)
 		}
 
 		return nil

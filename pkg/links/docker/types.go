@@ -1,7 +1,24 @@
 package docker
 
+import (
+	"crypto/sha256"
+	"fmt"
+)
+
 type RegistryAuthResponse struct {
 	Token string `json:"token"`
+}
+
+type RegistryLayer struct {
+    MediaType string `json:"mediaType"`
+    Digest    string `json:"digest"`
+}
+
+// createIdFromParent creates a unique, deterministic ID for the layer based on its parent ID and digest
+func (l *RegistryLayer) createIdFromParent(parentId string) string {
+	h := sha256.New()
+	h.Write([]byte(parentId + "\n" + l.Digest))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 type RegistryManifestV2 struct {
@@ -10,10 +27,7 @@ type RegistryManifestV2 struct {
 	Config        struct {
 		Digest string `json:"digest"`
 	} `json:"config"`
-	Layers []struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-	} `json:"layers"`
+	Layers []RegistryLayer `json:"layers"`
 }
 
 type RegistryManifestList struct {
