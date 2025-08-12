@@ -480,8 +480,6 @@ func (dd *DockerDownloadLink) handleMultipleManifestV2(manifestData []byte, imag
 	return manifestEntry, nil
 }
 
-
-
 func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error {
 	registryBase := dd.getRegistryBase(dd.dockerImage)
 	url := fmt.Sprintf("%s/v2/%s/blobs/%s", registryBase, image, digest)
