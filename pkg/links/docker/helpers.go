@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -91,4 +93,19 @@ func removeImage(ctx context.Context, dockerClient *client.Client, imageID strin
 	if err != nil {
 		slog.Error("failed to remove image", slog.String("containerId", imageID), slog.String("error", err.Error()))
 	}
+}
+
+// createOutputFile creates an output file for a Docker image in the specified directory.
+// It extracts the image name from the imageID and creates a tar file with a sanitized name.
+func createOutputFile(outDir, imageID string) (*os.File, error) {
+	parts := strings.Split(imageID, "/")
+	imageName := strings.Replace(parts[len(parts)-1], ":", "-", -1)
+
+	outputPath := filepath.Join(outDir, imageName+".tar")
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output file: %w", err)
+	}
+
+	return outFile, nil
 }
