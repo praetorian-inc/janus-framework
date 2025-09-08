@@ -115,15 +115,13 @@ func (dd *DockerDownloadLink) downloadImageFromManifest(manifest *dockerTypes.Re
 
 	// Download layers
 	var layerFiles []string
-	var layerId string
 
 	for _, layer := range manifest.Layers {
-		newLayerId, layerTar, err := dd.downloadLayer(layer, layerId, imageName, outputDir)
+		layerTar, err := dd.downloadLayer(layer, imageName, outputDir)
 		if err != nil {
 			return fmt.Errorf("failed to download layer: %w", err)
 		}
 
-		layerId = newLayerId
 		layerFiles = append(layerFiles, layerTar)
 	}
 
@@ -146,27 +144,25 @@ func (dd *DockerDownloadLink) downloadImageFromManifest(manifest *dockerTypes.Re
 	return json.NewEncoder(file).Encode([]dockerTypes.RegistryManifestEntry{manifestEntry})
 }
 
-func (dd *DockerDownloadLink) downloadLayer(layer dockerTypes.RegistryLayer, parentId, image, outputDir string) (string, string, error) {
-	// Create a fake layer ID. Uses this layer ID instead of the layer digest to be in line with how
-	// 'docker save' works.
-	layerId := layer.CreateIdFromParent(parentId)
-
+func (dd *DockerDownloadLink) downloadLayer(layer dockerTypes.RegistryLayer, image, outputDir string) (string, error) {
 	if layer.MediaType != "application/vnd.oci.image.layer.v1.tar+gzip" && layer.MediaType != "application/vnd.docker.image.rootfs.diff.tar.gzip" {
-		return layerId, "", fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
+		return "", fmt.Errorf("unknown layer mediaType: %s", layer.MediaType)
 	}
 
+	layerId := strings.TrimPrefix(layer.Digest, "sha256:")
 	layerTar := fmt.Sprintf("%s.tar", layerId)
 	layerPath := filepath.Join(outputDir, layerTar)
+
 	if _, err := os.Stat(layerPath); err == nil {
-		return layerId, layerTar, nil
+		return layerTar, nil
 	}
 
 	layerData, err := dd.registryClient.GetLayerData(image, layer.Digest)
 	if err != nil {
-		return layerId, layerTar, err
+		return layerTar, err
 	}
 
-	return layerId, layerTar, os.WriteFile(layerPath, layerData, 0644)
+	return layerTar, os.WriteFile(layerPath, layerData, 0644)
 }
 
 func (dd *DockerDownloadLink) createTarFile(sourceDir string, tarFile *os.File) error {
