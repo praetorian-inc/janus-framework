@@ -29,6 +29,11 @@ func (n *noseyParker) startNpScanner() *io.PipeWriter {
 	pipeReader, pipeWriter := io.Pipe()
 
 	go func() {
+		defer func() {
+			// Always signal completion, even if there's an error
+			n.done <- true
+		}()
+
 		scanCmd := exec.Command(
 			"noseyparker",
 			"--verbose",
@@ -45,8 +50,6 @@ func (n *noseyParker) startNpScanner() *io.PipeWriter {
 			slog.Error("failed to scan repository", "error", err)
 			return
 		}
-
-		n.done <- true
 	}()
 
 	return pipeWriter
