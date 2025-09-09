@@ -29,6 +29,7 @@ type Module struct {
 	configs      []cfg.Config
 	inputParam   cfg.Param
 	autoRun      bool
+	strictness   Strictness
 	err          error
 	*cfg.ParamHolder
 }
@@ -76,6 +77,11 @@ func (m *Module) WithParams(params ...cfg.Param) *Module {
 
 func (m *Module) WithConfigs(configs ...cfg.Config) *Module {
 	m.configs = configs
+	return m
+}
+
+func (m *Module) WithStrictness(strictness Strictness) *Module {
+	m.strictness = strictness
 	return m
 }
 
@@ -147,7 +153,8 @@ func (m *Module) New() Chain {
 	c := NewChain(links...).
 		WithInputParam(m.inputParam).
 		WithOutputters(outputters...).
-		WithConfigs(moduleConfigs...)
+		WithConfigs(moduleConfigs...).
+		WithStrictness(m.strictness)
 
 	m.err = c.Error()
 	return c
