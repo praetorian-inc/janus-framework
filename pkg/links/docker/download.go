@@ -127,7 +127,7 @@ func (dd *DockerDownloadLink) downloadImageFromManifest(manifest *dockerTypes.Re
 
 	// Create manifest entry
 	repoTag := strings.TrimPrefix(imageName, "library/") + ":" + tag
-	manifestEntry := dockerTypes.RegistryManifestEntry{
+	manifestEntry := dockerTypes.DockerManifest{
 		Config:   configFile,
 		RepoTags: []string{repoTag},
 		Layers:   layerFiles,
@@ -141,7 +141,7 @@ func (dd *DockerDownloadLink) downloadImageFromManifest(manifest *dockerTypes.Re
 	}
 	defer file.Close()
 
-	return json.NewEncoder(file).Encode([]dockerTypes.RegistryManifestEntry{manifestEntry})
+	return json.NewEncoder(file).Encode([]dockerTypes.DockerManifest{manifestEntry})
 }
 
 func (dd *DockerDownloadLink) downloadLayer(layer dockerTypes.RegistryLayer, image, outputDir string) (string, error) {
@@ -241,9 +241,9 @@ func (dgl *DockerGetLayersLink) Process(dockerImage *dockerTypes.DockerImage) er
 
 	// Emit config first
 	if manifest.Config.Digest != "" {
-		configInput := &dockerTypes.DockerLayerInput{
+		configInput := &dockerTypes.DockerLayer{
 			DockerImage: dockerImage,
-			LayerDigest: manifest.Config.Digest,
+			Digest:      manifest.Config.Digest,
 		}
 		if err := dgl.Send(configInput); err != nil {
 			return fmt.Errorf("failed to send config input: %w", err)
@@ -252,9 +252,9 @@ func (dgl *DockerGetLayersLink) Process(dockerImage *dockerTypes.DockerImage) er
 
 	// Then emit each layer
 	for _, layer := range manifest.Layers {
-		layerInput := &dockerTypes.DockerLayerInput{
+		layerInput := &dockerTypes.DockerLayer{
 			DockerImage: dockerImage,
-			LayerDigest: layer.Digest,
+			Digest:      layer.Digest,
 		}
 		if err := dgl.Send(layerInput); err != nil {
 			return fmt.Errorf("failed to send layer input: %w", err)
@@ -276,23 +276,23 @@ func NewDockerDownloadLayer(configs ...cfg.Config) chain.Link {
 	return ddl
 }
 
-func (ddl *DockerDownloadLayerLink) Process(layerInput *dockerTypes.DockerLayerInput) error {
-	if layerInput.DockerImage == nil || layerInput.LayerDigest == "" {
-		return fmt.Errorf("DockerImage and LayerDigest are required")
+func (ddl *DockerDownloadLayerLink) Process(layer *dockerTypes.DockerLayer) error {
+	if layer.DockerImage == nil || layer.Digest == "" {
+		return fmt.Errorf("DockerImage and Digest are required")
 	}
 
-	ddl.registryClient = *dockerTypes.NewDockerRegistryClient(layerInput.DockerImage)
-	imageName, _ := ddl.registryClient.ParseImageName(layerInput.Image)
+	ddl.registryClient = *dockerTypes.NewDockerRegistryClient(layer.DockerImage)
+	imageName, _ := ddl.registryClient.ParseImageName(layer.DockerImage.Image)
 
 	if err := ddl.registryClient.RefreshToken(); err != nil {
 		return err
 	}
 
-	layerData, err := ddl.registryClient.GetLayerData(imageName, layerInput.LayerDigest)
+	layerData, err := ddl.registryClient.GetLayerData(imageName, layer.Digest)
 	if err != nil {
-		return fmt.Errorf("failed to download layer %s: %w", layerInput.LayerDigest, err)
+		return fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
 	}
 
-	layerInput.LayerData = layerData
-	return ddl.Send(layerInput)
+	layer.Data = layerData
+	return ddl.Send(layer)
 }

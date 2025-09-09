@@ -28,10 +28,10 @@ type DockerImage struct {
 	Manifest   *RegistryManifestV2
 }
 
-type DockerLayerInput struct {
+type DockerLayer struct {
 	*DockerImage
-	LayerDigest string // The specific layer digest to download
-	LayerData   []byte // The downloaded layer data
+	Digest string
+	Data   []byte
 }
 
 func (i *DockerImage) ToNPInputs() ([]types.NPInput, error) {
@@ -116,9 +116,9 @@ func (i *DockerImage) createNPInputs(tarReader *tar.Reader, manifest []DockerMan
 
 		var inputs []types.NPInput
 		if isLayer {
-			inputs, err = i.processLayer(tarReader, fileName, manifest)
+			inputs, err = i.processLayer(tarReader, fileName)
 		} else {
-			inputs, err = i.processFile(tarReader, fileName, manifest)
+			inputs, err = i.processFile(tarReader, fileName)
 		}
 
 		if err != nil {
@@ -155,23 +155,36 @@ func (i *DockerImage) extractFileName(header *tar.Header, manifest []DockerManif
 	return layerName, isLayer
 }
 
-func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, manifest []DockerManifest) ([]types.NPInput, error) {
-	layerReader, cleanup, err := i.getLayerReader(tarReader, layerName)
+func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string) ([]types.NPInput, error) {
+	var npInputs []types.NPInput
+
+	err := i.ProcessLayerWithCallback(tarReader, layerName, func(npInput *types.NPInput) error {
+		npInputs = append(npInputs, *npInput)
+		return nil
+	})
+
+	return npInputs, err
+}
+
+type LayerProcessCallback func(npInput *types.NPInput) error
+
+// ProcessLayerWithCallback processes a layer using a callback for each NPInput.
+// This eliminates duplication between streaming and collecting layer processing.
+func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName string, callback LayerProcessCallback) error {
+	layerReader, cleanup, err := i.getLayerReader(reader, layerName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if layerReader == nil {
-		return []types.NPInput{}, nil // Empty layer
+		return nil // Empty layer
 	}
 	defer cleanup()
 
-	npInputs := []types.NPInput{}
 	for {
 		header, err := layerReader.Next()
 		if err == io.EOF {
 			break
 		}
-
 		if err != nil {
 			slog.Debug("failed reading layer header", "error", err)
 			continue
@@ -188,30 +201,33 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, mani
 		}
 
 		if len(content) == 0 {
-			slog.Debug("empty file", "file", header.Name)
 			continue
 		}
 
-		npInputs = append(npInputs, types.NPInput{
+		npInput := &types.NPInput{
 			ContentBase64: base64.StdEncoding.EncodeToString(content),
 			Provenance: types.NPProvenance{
 				Platform:     "docker",
 				ResourceType: "layer",
-				ResourceID:   manifest[0].RepoTags[0],
+				ResourceID:   i.Image,
 				Region:       fmt.Sprintf("%s,%s", layerName, header.Name),
 			},
-		})
+		}
+
+		if err := callback(npInput); err != nil {
+			return err
+		}
 	}
 
-	return npInputs, nil
+	return nil
 }
 
 // getLayerReader creates the appropriate reader for a Docker layer, handling both gzipped and uncompressed layers.
 // It returns a cleanup function that should be called to close the reader.
-func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*tar.Reader, func() error, error) {
+func (i *DockerImage) getLayerReader(reader io.Reader, layerName string) (*tar.Reader, func() error, error) {
 	var cleanup func() error = func() error { return nil }
 
-	magicBytes, err := i.extractMagicBytes(tarReader, 2)
+	magicBytes, err := extractMagicBytes(reader, 2)
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -223,7 +239,7 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	// Create a reader that starts with the header bytes we already read,
 	// followed by the rest of the tar entry
 	headerReader := bytes.NewReader(magicBytes)
-	combinedReader := io.MultiReader(headerReader, tarReader)
+	combinedReader := io.MultiReader(headerReader, reader)
 
 	var layerReader io.Reader
 
@@ -241,9 +257,9 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	return tar.NewReader(layerReader), cleanup, nil
 }
 
-func (i *DockerImage) extractMagicBytes(tarReader *tar.Reader, numBytes int) ([]byte, error) {
+func extractMagicBytes(reader io.Reader, numBytes int) ([]byte, error) {
 	magicBytes := make([]byte, numBytes)
-	n, err := tarReader.Read(magicBytes)
+	n, err := reader.Read(magicBytes)
 	if err != nil {
 		return []byte{}, fmt.Errorf("failed to read header: %w", err)
 	}
@@ -257,7 +273,7 @@ func isGzip(magicBytes []byte) bool {
 	return len(magicBytes) >= 2 && bytes.Equal(magicBytes[:2], gzipMagicBytes)
 }
 
-func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manifest []DockerManifest) ([]types.NPInput, error) {
+func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string) ([]types.NPInput, error) {
 	content, err := io.ReadAll(tarReader)
 
 	if err != nil {
@@ -273,7 +289,7 @@ func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manife
 		Provenance: types.NPProvenance{
 			Platform:     "docker",
 			ResourceType: "image",
-			ResourceID:   manifest[0].RepoTags[0],
+			ResourceID:   i.Image,
 			Region:       fmt.Sprintf("file:%s", fileName),
 		},
 	}
