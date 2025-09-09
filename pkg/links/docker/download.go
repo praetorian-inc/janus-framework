@@ -107,20 +107,39 @@ func (dd *DockerDownloadLink) parseImageName(imageWithTag string) (string, strin
 	// Default to latest tag if no tag is provided
 	tag := "latest"
 	image := imageWithTag
-	if strings.Contains(image, ":") {
-		parts := strings.Split(image, ":")
-		image = parts[0]
-		tag = parts[1]
+
+	if lastColon := strings.LastIndex(image, ":"); lastColon != -1 {
+		afterColon := image[lastColon+1:]
+		if !strings.Contains(afterColon, "/") {
+			image = image[:lastColon]
+			tag = afterColon
+		}
 	}
 
-	// Official images need the library prefix
 	if !strings.Contains(image, "/") {
 		image = "library/" + image
 	}
 
 	// Handle a registry URL being part of the image name (e.g. <url>/<org>/<name>)
-	if parts := strings.SplitN(image, "/", 3); len(parts) >= 3 {
-		image = fmt.Sprintf("%s/%s", parts[1], parts[2])
+	if parts := strings.SplitN(image, "/", 3); len(parts) >= 2 {
+		registryBase := parts[0]
+
+		if strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com") {
+			image = parts[1]
+		} else if strings.HasPrefix(image, "public.ecr.aws/") {
+			if len(parts) >= 3 {
+				image = parts[2]
+			} else {
+				image = parts[1]
+			}
+		} else if len(parts) >= 3 {
+			// Standard 3-part format (registry/org/name): extract org/name
+			image = fmt.Sprintf("%s/%s", parts[1], parts[2])
+		} else if strings.Contains(registryBase, ".") || strings.Contains(registryBase, ":") {
+			// 2-part format with registry URL (registry.com/image): extract image name
+			image = parts[1]
+		}
+		// else: 2-part DockerHub format (user/repo) - leave unchanged
 	}
 
 	return image, tag
@@ -129,11 +148,24 @@ func (dd *DockerDownloadLink) parseImageName(imageWithTag string) (string, strin
 func (dd *DockerDownloadLink) refreshToken(dockerImage *types.DockerImage) error {
 	imageName, tag := dd.parseImageName(dockerImage.Image)
 
+	// Special handling for ECR - don't reset token, just recreate it
+	registryBase := strings.Split(dockerImage.Image, "/")[0]
+	if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
+		if dockerImage.AuthConfig.Username != "" && dockerImage.AuthConfig.Password != "" {
+			auth := fmt.Sprintf("%s:%s", dockerImage.AuthConfig.Username, dockerImage.AuthConfig.Password)
+			encodedAuth := base64.StdEncoding.EncodeToString([]byte(auth))
+			dd.token = encodedAuth
+			slog.Debug("ECR token refreshed", "authLength", len(encodedAuth))
+			return nil
+		}
+		return fmt.Errorf("ECR credentials not available for refresh")
+	}
+
 	// Reset the token so we know if a refresh is needed versus auth failure
 	dd.token = ""
 
 	// Always try to access the registry first to get the WWW-Authenticate header or see if a token is required.
-	registryBase := dd.getRegistryBase(dockerImage)
+	registryBase = dd.getRegistryBase(dockerImage)
 	url := fmt.Sprintf("%s/v2/%s/manifests/%s", registryBase, imageName, tag)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -161,7 +193,6 @@ func (dd *DockerDownloadLink) refreshToken(dockerImage *types.DockerImage) error
 	}
 
 	if resp.StatusCode == http.StatusOK {
-		// A token is not needed if we can access the manifest.
 		return nil
 	}
 
@@ -238,6 +269,19 @@ func (dd *DockerDownloadLink) parseWWWAuthenticate(wwwAuth, image string) (strin
 }
 
 func (dd *DockerDownloadLink) getTokenFromAuthEndpoint(authURL string, dockerImage *types.DockerImage, withAuth bool) (string, error) {
+	// Special handling for ECR registries
+	registryBase := strings.Split(dockerImage.Image, "/")[0]
+	if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
+		slog.Debug("ECR registry detected", "registry", registryBase, "withAuth", withAuth, "username", dockerImage.AuthConfig.Username, "hasPassword", dockerImage.AuthConfig.Password != "")
+		if withAuth && dockerImage.AuthConfig.Username != "" && dockerImage.AuthConfig.Password != "" {
+			// ECR uses Basic auth directly as the token
+			auth := fmt.Sprintf("%s:%s", dockerImage.AuthConfig.Username, dockerImage.AuthConfig.Password)
+			encodedAuth := base64.StdEncoding.EncodeToString([]byte(auth))
+			slog.Debug("ECR auth token created", "authLength", len(encodedAuth))
+			return encodedAuth, nil
+		}
+	}
+
 	req, err := http.NewRequest("GET", authURL, nil)
 	if err != nil {
 		return "", err
@@ -278,7 +322,13 @@ func (dd *DockerDownloadLink) getManifest(image, digest string) ([]byte, error) 
 	}
 
 	if dd.token != "" {
-		req.Header.Set("Authorization", "Bearer "+dd.token)
+		// Special handling for ECR - use Basic auth instead of Bearer
+		registryBase := strings.Split(dd.dockerImage.Image, "/")[0]
+		if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
+			req.Header.Set("Authorization", "Basic "+dd.token)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+dd.token)
+		}
 	}
 	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
 	req.Header.Add("Accept", "application/vnd.oci.image.index.v1+json")
@@ -489,7 +539,13 @@ func (dd *DockerDownloadLink) fetchBlob(image, digest, targetFile string) error 
 		return err
 	}
 	if dd.token != "" {
-		req.Header.Set("Authorization", "Bearer "+dd.token)
+		// Special handling for ECR - use Basic auth instead of Bearer
+		registryBase := strings.Split(dd.dockerImage.Image, "/")[0]
+		if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
+			req.Header.Set("Authorization", "Basic "+dd.token)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+dd.token)
+		}
 	}
 
 	resp, err := dd.doRequestWithRetry(req)

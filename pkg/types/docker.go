@@ -191,6 +191,10 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, mani
 				ResourceType: "layer",
 				ResourceID:   manifest[0].RepoTags[0],
 				Region:       fmt.Sprintf("%s,%s", layerName, header.Name),
+				RepoPath:     layerName,
+				FirstCommit: &NPCommitMetadata{
+					BlobPath: header.Name,
+				},
 			},
 		})
 	}
@@ -267,6 +271,7 @@ func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manife
 			ResourceType: "image",
 			ResourceID:   manifest[0].RepoTags[0],
 			Region:       fmt.Sprintf("file:%s", fileName),
+			RepoPath:     fileName,
 		},
 	}
 
