@@ -223,3 +223,52 @@ func TestModule_AutoRun(t *testing.T) {
 	assert.NoError(t, module.Error())
 	assert.Equal(t, "autorun!\n", w.String())
 }
+
+func TestModule_WithStrictness_Lax(t *testing.T) {
+	w := &bytes.Buffer{}
+
+	laxModule := chain.NewModule(
+		cfg.NewMetadata(
+			"strictness-lax-test",
+			"Test module with Lax strictness",
+		).WithChainInputParam("strings"),
+	).WithStrictness(chain.Lax).
+		WithLinks(
+			basics.NewStrLink,
+			basics.NewProcessErrorLink,
+		).WithConfigs(
+		cfg.WithArg("writer", w),
+	).WithOutputters(
+		output.NewWriterOutputter,
+	).WithInputParam(
+		cfg.NewParam[[]string]("strings", "strings to process"),
+	)
+
+	err := laxModule.Run(cfg.WithCLIArgs([]string{"-strings", "test"}))
+	assert.NoError(t, err, "Lax strictness should not error on ProcessError")
+	assert.NoError(t, laxModule.Error())
+}
+
+func TestModule_WithStrictness_Moderate(t *testing.T) {
+	w := &bytes.Buffer{}
+
+	moderateModule := chain.NewModule(
+		cfg.NewMetadata(
+			"strictness-moderate-test",
+			"Test module with Moderate strictness",
+		).WithChainInputParam("strings"),
+	).WithLinks(
+		basics.NewStrLink,
+		basics.NewProcessErrorLink,
+	).WithConfigs(
+		cfg.WithArg("writer", w),
+	).WithOutputters(
+		output.NewWriterOutputter,
+	).WithInputParam(
+		cfg.NewParam[[]string]("strings", "strings to process"),
+	)
+
+	err := moderateModule.Run(cfg.WithCLIArgs([]string{"-strings", "test"}))
+	assert.Error(t, err, "Moderate strictness should error on ProcessError")
+	assert.Error(t, moderateModule.Error())
+}
