@@ -22,6 +22,12 @@ func NewDockerLayerToNP(configs ...cfg.Config) chain.Link {
 	return dlnp
 }
 
+func (dlnp *DockerLayerToNP) Params() []cfg.Param {
+	return []cfg.Param{
+		cfg.NewParam[int]("max-file-size", "maximum file size to process (in MB)").WithDefault(10),
+	}
+}
+
 func (dlnp *DockerLayerToNP) Process(layer *dockerTypes.DockerLayer) error {
 	if layer.Data == nil {
 		return fmt.Errorf("layer data is required for NP conversion")
@@ -63,8 +69,13 @@ func (dlnp *DockerLayerToNP) processConfigData(layer *dockerTypes.DockerLayer) e
 }
 
 func (dlnp *DockerLayerToNP) processLayerData(layer *dockerTypes.DockerLayer) error {
+	maxFileSizeMB, err := cfg.As[int](dlnp.Arg("max-file-size"))
+	if err != nil {
+		return err
+	}
+
 	sendCb := func(npInput *types.NPInput) error {
 		return dlnp.Send(npInput)
 	}
-	return layer.DockerImage.ProcessLayerWithCallback(bytes.NewReader(layer.Data), layer.Digest, sendCb)
+	return layer.DockerImage.ProcessLayerWithCallback(bytes.NewReader(layer.Data), layer.Digest, maxFileSizeMB, sendCb)
 }

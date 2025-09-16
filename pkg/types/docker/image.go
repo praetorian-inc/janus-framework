@@ -158,7 +158,7 @@ func (i *DockerImage) extractFileName(header *tar.Header, manifest []DockerManif
 func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string) ([]types.NPInput, error) {
 	var npInputs []types.NPInput
 
-	err := i.ProcessLayerWithCallback(tarReader, layerName, func(npInput *types.NPInput) error {
+	err := i.ProcessLayerWithCallback(tarReader, layerName, 10, func(npInput *types.NPInput) error {
 		npInputs = append(npInputs, *npInput)
 		return nil
 	})
@@ -168,9 +168,9 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string) ([]t
 
 type LayerProcessCallback func(npInput *types.NPInput) error
 
-// ProcessLayerWithCallback processes a layer using a callback for each NPInput.
-// This eliminates duplication between streaming and collecting layer processing.
-func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName string, callback LayerProcessCallback) error {
+const oneMB = 1024 * 1024
+
+func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName string, maxFileSizeMB int, callback LayerProcessCallback) error {
 	layerReader, cleanup, err := i.getLayerReader(reader, layerName)
 	if err != nil {
 		return err
@@ -201,6 +201,13 @@ func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName strin
 		}
 
 		if len(content) == 0 {
+			continue
+		}
+
+		// Large files significantly increase memory usage and are unlikely to contain secrets
+		fileSizeMB := len(content) / oneMB
+		if fileSizeMB > maxFileSizeMB {
+			slog.Debug("Skipping large file", "file", header.Name, "size_mb", fileSizeMB, "max_mb", maxFileSizeMB)
 			continue
 		}
 
