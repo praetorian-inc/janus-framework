@@ -30,7 +30,6 @@ func (n *noseyParker) startNpScanner() *io.PipeWriter {
 
 	go func() {
 		defer func() {
-			// Always signal completion, even if there's an error
 			n.done <- true
 		}()
 

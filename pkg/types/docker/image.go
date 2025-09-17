@@ -218,6 +218,10 @@ func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName strin
 				ResourceType: "layer",
 				ResourceID:   i.Image,
 				Region:       fmt.Sprintf("%s,%s", layerName, header.Name),
+				RepoPath:     layerName,
+				FirstCommit: &types.NPCommitMetadata{
+					BlobPath: header.Name,
+				},
 			},
 		}
 
@@ -298,6 +302,7 @@ func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string) ([]typ
 			ResourceType: "image",
 			ResourceID:   i.Image,
 			Region:       fmt.Sprintf("file:%s", fileName),
+			RepoPath:     fileName,
 		},
 	}
 
