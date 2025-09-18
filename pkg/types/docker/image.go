@@ -207,7 +207,7 @@ func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName strin
 		// Large files significantly increase memory usage and are unlikely to contain secrets
 		fileSizeMB := len(content) / oneMB
 		if fileSizeMB > maxFileSizeMB {
-			slog.Debug("Skipping large file", "file", header.Name, "size_mb", fileSizeMB, "max_mb", maxFileSizeMB)
+			slog.Info("Skipping large file", "file", header.Name, "size_mb", fileSizeMB, "max_mb", maxFileSizeMB)
 			continue
 		}
 
