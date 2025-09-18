@@ -278,16 +278,7 @@ func (drc *DockerRegistryClient) GetManifest(imageName, tag string) (*RegistryMa
 		return nil, err
 	}
 
-	if drc.token != "" {
-		req.Header.Set("Authorization", "Bearer "+drc.token)
-		// Special handling for ECR - use Basic auth instead of Bearer
-		registryBase := strings.Split(drc.dockerImage.Image, "/")[0]
-		if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
-			req.Header.Set("Authorization", "Basic "+drc.token)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+drc.token)
-		}
-	}
+	drc.setAuthHeader(req)
 	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
 	req.Header.Add("Accept", "application/vnd.oci.image.index.v1+json")
 	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
@@ -312,6 +303,19 @@ func (drc *DockerRegistryClient) GetManifest(imageName, tag string) (*RegistryMa
 	return drc.parseManifest(body, imageName, tag)
 }
 
+func (drc *DockerRegistryClient) setAuthHeader(req *http.Request) {
+	if drc.token == "" {
+		return
+	}
+
+	registryBase := strings.Split(drc.dockerImage.Image, "/")[0]
+	if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
+		req.Header.Set("Authorization", "Basic "+drc.token)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+drc.token)
+	}
+}
+
 // doRequestWithRetry performs an HTTP request with automatic token refresh and retry logic.
 // If a 401 is received, it attempts to refresh the token and retry once.
 // If the retry also fails with 401, it returns an auth error.
@@ -331,9 +335,7 @@ func (drc *DockerRegistryClient) doRequestWithRetry(req *http.Request) (*http.Re
 		}
 
 		// Update the request with the new token
-		if drc.token != "" {
-			req.Header.Set("Authorization", "Bearer "+drc.token)
-		}
+		drc.setAuthHeader(req)
 
 		// Retry the request
 		resp2, err := http.DefaultClient.Do(req)
@@ -411,15 +413,7 @@ func (drc *DockerRegistryClient) GetLayerData(image, digest string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	if drc.token != "" {
-		// Special handling for ECR - use Basic auth instead of Bearer
-		registryBase := strings.Split(drc.dockerImage.Image, "/")[0]
-		if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
-			req.Header.Set("Authorization", "Basic "+drc.token)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+drc.token)
-		}
-	}
+	drc.setAuthHeader(req)
 
 	resp, err := drc.doRequestWithRetry(req)
 	if err != nil {
