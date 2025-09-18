@@ -4,8 +4,9 @@ import (
 	"testing"
 )
 
-func TestDockerDownloadLink_parseImageName(t *testing.T) {
-	dd := &DockerDownloadLink{}
+func TestDockerRegistryClient_ParseImageName(t *testing.T) {
+	dockerImage := &DockerImage{}
+	registryClient := NewDockerRegistryClient(dockerImage)
 
 	tests := []struct {
 		name          string
@@ -124,25 +125,26 @@ func TestDockerDownloadLink_parseImageName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			image, tag := dd.parseImageName(tt.input)
+			image, tag := registryClient.ParseImageName(tt.input)
 
 			if image != tt.expectedImage {
-				t.Errorf("parseImageName(%q) image = %q, want %q", tt.input, image, tt.expectedImage)
+				t.Errorf("ParseImageName(%q) image = %q, want %q", tt.input, image, tt.expectedImage)
 			}
 
 			if tag != tt.expectedTag {
-				t.Errorf("parseImageName(%q) tag = %q, want %q", tt.input, tag, tt.expectedTag)
+				t.Errorf("ParseImageName(%q) tag = %q, want %q", tt.input, tag, tt.expectedTag)
 			}
 		})
 	}
 }
 
 // Test specific edge cases that were problematic
-func TestDockerDownloadLink_parseImageName_EdgeCases(t *testing.T) {
-	dd := &DockerDownloadLink{}
+func TestDockerRegistryClient_ParseImageName_EdgeCases(t *testing.T) {
+	dockerImage := &DockerImage{}
+	registryClient := NewDockerRegistryClient(dockerImage)
 
 	t.Run("grafana/grafana should remain unchanged", func(t *testing.T) {
-		image, tag := dd.parseImageName("grafana/grafana")
+		image, tag := registryClient.ParseImageName("grafana/grafana")
 		expectedImage := "grafana/grafana"
 		expectedTag := "latest"
 
@@ -156,7 +158,7 @@ func TestDockerDownloadLink_parseImageName_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("registry.com/image should extract image name", func(t *testing.T) {
-		image, tag := dd.parseImageName("registry.com/myapp")
+		image, tag := registryClient.ParseImageName("registry.com/myapp")
 		expectedImage := "myapp"
 		expectedTag := "latest"
 
@@ -170,7 +172,7 @@ func TestDockerDownloadLink_parseImageName_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("ECR registry should extract repo name", func(t *testing.T) {
-		image, tag := dd.parseImageName("123456789012.dkr.ecr.us-east-2.amazonaws.com/nebula-test-secrets-repo-nyx0")
+		image, tag := registryClient.ParseImageName("123456789012.dkr.ecr.us-east-2.amazonaws.com/nebula-test-secrets-repo-nyx0")
 		expectedImage := "nebula-test-secrets-repo-nyx0"
 		expectedTag := "latest"
 

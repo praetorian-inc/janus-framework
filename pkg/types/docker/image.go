@@ -1,4 +1,4 @@
-package types
+package docker
 
 import (
 	"archive/tar"
@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/docker/docker/api/types/registry"
+	"github.com/praetorian-inc/janus-framework/pkg/types"
 )
 
 type DockerManifest struct {
@@ -24,11 +25,18 @@ type DockerImage struct {
 	AuthConfig registry.AuthConfig
 	Image      string
 	LocalPath  string
+	Manifest   *RegistryManifestV2
 }
 
-func (i *DockerImage) ToNPInputs() ([]NPInput, error) {
+type DockerLayer struct {
+	*DockerImage
+	Digest string
+	Data   []byte
+}
+
+func (i *DockerImage) ToNPInputs() ([]types.NPInput, error) {
 	if i.LocalPath == "" {
-		return nil, fmt.Errorf("local path required to convert to []NPInput")
+		return nil, fmt.Errorf("local path required to convert to []types.NPInput")
 	}
 
 	imageFile, err := os.Open(i.LocalPath)
@@ -87,8 +95,8 @@ func (i *DockerImage) parseManifest(reader io.Reader) ([]DockerManifest, error) 
 	return manifest, nil
 }
 
-func (i *DockerImage) createNPInputs(tarReader *tar.Reader, manifest []DockerManifest) ([]NPInput, error) {
-	totalInputs := []NPInput{}
+func (i *DockerImage) createNPInputs(tarReader *tar.Reader, manifest []DockerManifest) ([]types.NPInput, error) {
+	totalInputs := []types.NPInput{}
 
 	for {
 		header, err := tarReader.Next()
@@ -106,11 +114,11 @@ func (i *DockerImage) createNPInputs(tarReader *tar.Reader, manifest []DockerMan
 
 		fileName, isLayer := i.extractFileName(header, manifest)
 
-		var inputs []NPInput
+		var inputs []types.NPInput
 		if isLayer {
-			inputs, err = i.processLayer(tarReader, fileName, manifest)
+			inputs, err = i.processLayer(tarReader, fileName)
 		} else {
-			inputs, err = i.processFile(tarReader, fileName, manifest)
+			inputs, err = i.processFile(tarReader, fileName)
 		}
 
 		if err != nil {
@@ -147,23 +155,36 @@ func (i *DockerImage) extractFileName(header *tar.Header, manifest []DockerManif
 	return layerName, isLayer
 }
 
-func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, manifest []DockerManifest) ([]NPInput, error) {
-	layerReader, cleanup, err := i.getLayerReader(tarReader, layerName)
+func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string) ([]types.NPInput, error) {
+	var npInputs []types.NPInput
+
+	err := i.ProcessLayerWithCallback(tarReader, layerName, 10, func(npInput *types.NPInput) error {
+		npInputs = append(npInputs, *npInput)
+		return nil
+	})
+
+	return npInputs, err
+}
+
+type LayerProcessCallback func(npInput *types.NPInput) error
+
+const oneMB = 1024 * 1024
+
+func (i *DockerImage) ProcessLayerWithCallback(reader io.Reader, layerName string, maxFileSizeMB int, callback LayerProcessCallback) error {
+	layerReader, cleanup, err := i.getLayerReader(reader, layerName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if layerReader == nil {
-		return []NPInput{}, nil // Empty layer
+		return nil // Empty layer
 	}
 	defer cleanup()
 
-	npInputs := []NPInput{}
 	for {
 		header, err := layerReader.Next()
 		if err == io.EOF {
 			break
 		}
-
 		if err != nil {
 			slog.Debug("failed reading layer header", "error", err)
 			continue
@@ -180,34 +201,44 @@ func (i *DockerImage) processLayer(tarReader *tar.Reader, layerName string, mani
 		}
 
 		if len(content) == 0 {
-			slog.Debug("empty file", "file", header.Name)
 			continue
 		}
 
-		npInputs = append(npInputs, NPInput{
+		// Large files significantly increase memory usage and are unlikely to contain secrets
+		fileSizeMB := len(content) / oneMB
+		if fileSizeMB > maxFileSizeMB {
+			slog.Info("Skipping large file", "file", header.Name, "size_mb", fileSizeMB, "max_mb", maxFileSizeMB)
+			continue
+		}
+
+		npInput := &types.NPInput{
 			ContentBase64: base64.StdEncoding.EncodeToString(content),
-			Provenance: NPProvenance{
+			Provenance: types.NPProvenance{
 				Platform:     "docker",
 				ResourceType: "layer",
-				ResourceID:   manifest[0].RepoTags[0],
+				ResourceID:   i.Image,
 				Region:       fmt.Sprintf("%s,%s", layerName, header.Name),
 				RepoPath:     layerName,
-				FirstCommit: &NPCommitMetadata{
+				FirstCommit: &types.NPCommitMetadata{
 					BlobPath: header.Name,
 				},
 			},
-		})
+		}
+
+		if err := callback(npInput); err != nil {
+			return err
+		}
 	}
 
-	return npInputs, nil
+	return nil
 }
 
 // getLayerReader creates the appropriate reader for a Docker layer, handling both gzipped and uncompressed layers.
 // It returns a cleanup function that should be called to close the reader.
-func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*tar.Reader, func() error, error) {
+func (i *DockerImage) getLayerReader(reader io.Reader, layerName string) (*tar.Reader, func() error, error) {
 	var cleanup func() error = func() error { return nil }
 
-	magicBytes, err := i.extractMagicBytes(tarReader, 2)
+	magicBytes, err := extractMagicBytes(reader, 2)
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -219,7 +250,7 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	// Create a reader that starts with the header bytes we already read,
 	// followed by the rest of the tar entry
 	headerReader := bytes.NewReader(magicBytes)
-	combinedReader := io.MultiReader(headerReader, tarReader)
+	combinedReader := io.MultiReader(headerReader, reader)
 
 	var layerReader io.Reader
 
@@ -237,9 +268,9 @@ func (i *DockerImage) getLayerReader(tarReader *tar.Reader, layerName string) (*
 	return tar.NewReader(layerReader), cleanup, nil
 }
 
-func (i *DockerImage) extractMagicBytes(tarReader *tar.Reader, numBytes int) ([]byte, error) {
+func extractMagicBytes(reader io.Reader, numBytes int) ([]byte, error) {
 	magicBytes := make([]byte, numBytes)
-	n, err := tarReader.Read(magicBytes)
+	n, err := reader.Read(magicBytes)
 	if err != nil {
 		return []byte{}, fmt.Errorf("failed to read header: %w", err)
 	}
@@ -253,7 +284,7 @@ func isGzip(magicBytes []byte) bool {
 	return len(magicBytes) >= 2 && bytes.Equal(magicBytes[:2], gzipMagicBytes)
 }
 
-func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manifest []DockerManifest) ([]NPInput, error) {
+func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string) ([]types.NPInput, error) {
 	content, err := io.ReadAll(tarReader)
 
 	if err != nil {
@@ -264,16 +295,16 @@ func (i *DockerImage) processFile(tarReader *tar.Reader, fileName string, manife
 		return nil, fmt.Errorf("file %q is empty", fileName)
 	}
 
-	input := NPInput{
+	input := types.NPInput{
 		ContentBase64: base64.StdEncoding.EncodeToString(content),
-		Provenance: NPProvenance{
+		Provenance: types.NPProvenance{
 			Platform:     "docker",
 			ResourceType: "image",
-			ResourceID:   manifest[0].RepoTags[0],
+			ResourceID:   i.Image,
 			Region:       fmt.Sprintf("file:%s", fileName),
 			RepoPath:     fileName,
 		},
 	}
 
-	return []NPInput{input}, nil
+	return []types.NPInput{input}, nil
 }
