@@ -59,14 +59,7 @@ func (drc *DockerRegistryClient) RefreshToken() error {
 	// Special handling for ECR - don't reset token, just recreate it
 	registryBase := strings.Split(drc.dockerImage.Image, "/")[0]
 	if (strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com")) || strings.Contains(registryBase, "public.ecr.aws") {
-		if drc.dockerImage.AuthConfig.Username != "" && drc.dockerImage.AuthConfig.Password != "" {
-			auth := fmt.Sprintf("%s:%s", drc.dockerImage.AuthConfig.Username, drc.dockerImage.AuthConfig.Password)
-			encodedAuth := base64.StdEncoding.EncodeToString([]byte(auth))
-			drc.token = encodedAuth
-			slog.Debug("ECR token refreshed", "authLength", len(encodedAuth))
-			return nil
-		}
-		return fmt.Errorf("ECR credentials not available for refresh")
+		return drc.refreshECRToken()
 	}
 
 	// Reset the token so we know if a refresh is needed versus auth failure
@@ -107,45 +100,61 @@ func (drc *DockerRegistryClient) RefreshToken() error {
 	return fmt.Errorf("unexpected status code %d, %s", resp.StatusCode, url)
 }
 
+// Docker image name regex. Captures: registry, org, name, tag
+var imageRegex = regexp.MustCompile(`^(?:((?:[^/]+\.)+[^/:]+(?::\d+)?|[^/:]+:\d+)/)?(?:([^/:]+)/)?([^/:]+)(?::([^/:]+))?$`)
+
 func (drc *DockerRegistryClient) ParseImageName(imageWithTag string) (string, string) {
-	// Default to latest tag if no tag is provided
-	tag := "latest"
-	image := imageWithTag
-	if lastColon := strings.LastIndex(image, ":"); lastColon != -1 {
-		afterColon := image[lastColon+1:]
-		if !strings.Contains(afterColon, "/") {
-			image = image[:lastColon]
-			tag = afterColon
+	matches := imageRegex.FindStringSubmatch(imageWithTag)
+	if matches == nil {
+		// Invalid format, use default format
+		return "library/" + imageWithTag, "latest"
+	}
+
+	registry := matches[1]
+	org := matches[2]
+	name := matches[3]
+	tag := matches[4]
+
+	if tag == "" {
+		tag = "latest"
+	}
+
+	if registry == "" {
+		if org == "" {
+			org = "library"
 		}
+		return org + "/" + name, tag
 	}
 
-	if !strings.Contains(image, "/") {
-		image = "library/" + image
-	}
-
-	// Handle a registry URL being part of the image name (e.g. <url>/<org>/<name>)
-	if parts := strings.SplitN(image, "/", 3); len(parts) >= 2 {
-		registryBase := parts[0]
-
-		if strings.Contains(registryBase, "ecr") && strings.Contains(registryBase, "amazonaws.com") {
-			image = parts[1]
-		} else if strings.HasPrefix(image, "public.ecr.aws/") {
-			if len(parts) >= 3 {
-				image = parts[2]
-			} else {
-				image = parts[1]
-			}
-		} else if len(parts) >= 3 {
-			// Standard 3-part format (registry/org/name): extract org/name
-			image = fmt.Sprintf("%s/%s", parts[1], parts[2])
-		} else if strings.Contains(registryBase, ".") || strings.Contains(registryBase, ":") {
-			// 2-part format with registry URL (registry.com/image): extract image name
-			image = parts[1]
+	// ECR private registry
+	if strings.Contains(registry, "ecr") && strings.Contains(registry, "amazonaws.com") {
+		if org != "" {
+			return org, tag // org is actually the image name in ECR
 		}
-		// else: 2-part DockerHub format (user/repo) - leave unchanged
+		return name, tag
 	}
 
-	return image, tag
+	// ECR public registry
+	if strings.Contains(registry, "public.ecr.aws") {
+		return name, tag
+	}
+
+	// Standard registry format
+	if org != "" {
+		return org + "/" + name, tag
+	}
+	return name, tag
+}
+
+func (drc *DockerRegistryClient) refreshECRToken() error {
+	if drc.dockerImage.AuthConfig.Username != "" && drc.dockerImage.AuthConfig.Password != "" {
+		auth := fmt.Sprintf("%s:%s", drc.dockerImage.AuthConfig.Username, drc.dockerImage.AuthConfig.Password)
+		encodedAuth := base64.StdEncoding.EncodeToString([]byte(auth))
+		drc.token = encodedAuth
+		slog.Debug("ECR token refreshed", "authLength", len(encodedAuth))
+		return nil
+	}
+	return fmt.Errorf("ECR credentials not available for refresh")
 }
 
 const defaultRegistryBase = "https://registry-1.docker.io"

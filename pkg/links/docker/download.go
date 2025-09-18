@@ -239,7 +239,14 @@ func (dgl *DockerGetLayersLink) Process(dockerImage *dockerTypes.DockerImage) er
 
 	dockerImage.Manifest = manifest
 
-	// Emit config first
+	if err := dgl.emitConfig(dockerImage, manifest); err != nil {
+		return err
+	}
+
+	return dgl.emitLayers(dockerImage, manifest)
+}
+
+func (dgl *DockerGetLayersLink) emitConfig(dockerImage *dockerTypes.DockerImage, manifest *dockerTypes.RegistryManifestV2) error {
 	if manifest.Config.Digest != "" {
 		configInput := &dockerTypes.DockerLayer{
 			DockerImage: dockerImage,
@@ -249,8 +256,10 @@ func (dgl *DockerGetLayersLink) Process(dockerImage *dockerTypes.DockerImage) er
 			return fmt.Errorf("failed to send config input: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Then emit each layer
+func (dgl *DockerGetLayersLink) emitLayers(dockerImage *dockerTypes.DockerImage, manifest *dockerTypes.RegistryManifestV2) error {
 	for _, layer := range manifest.Layers {
 		layerInput := &dockerTypes.DockerLayer{
 			DockerImage: dockerImage,
@@ -260,7 +269,6 @@ func (dgl *DockerGetLayersLink) Process(dockerImage *dockerTypes.DockerImage) er
 			return fmt.Errorf("failed to send layer input: %w", err)
 		}
 	}
-
 	return nil
 }
 
