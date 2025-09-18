@@ -5,7 +5,6 @@ import (
 )
 
 func TestDockerRegistryClient_ParseImageName(t *testing.T) {
-	// Create a registry client to test the ParseImageName method
 	dockerImage := &DockerImage{}
 	registryClient := NewDockerRegistryClient(dockerImage)
 
@@ -141,7 +140,6 @@ func TestDockerRegistryClient_ParseImageName(t *testing.T) {
 
 // Test specific edge cases that were problematic
 func TestDockerRegistryClient_ParseImageName_EdgeCases(t *testing.T) {
-	// Create a registry client to test the ParseImageName method
 	dockerImage := &DockerImage{}
 	registryClient := NewDockerRegistryClient(dockerImage)
 
