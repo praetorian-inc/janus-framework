@@ -98,45 +98,16 @@ func (m *MethodsImpl) ExecuteCmd(cmd *exec.Cmd, lineparser func(string)) error {
 }
 
 func (m *MethodsImpl) ExecuteCmdAll(cmd *exec.Cmd) ([]byte, error) {
-	const maxOutputSize = 4 * 1024 * 1024 // 4MB
-
-	stdout, err := cmd.StdoutPipe()
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("could not get stdout pipe: %v", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("could not get stderr pipe: %v", err)
-	}
+		stderr := err.Error()
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to execute: %q: %s", strings.Join(cmd.Args, " "), err)
-	}
-
-	// Read both pipes concurrently to prevent deadlock.
-	var stderrBytes []byte
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		stderrBytes, _ = io.ReadAll(stderr)
-	}()
-
-	output, _ := io.ReadAll(io.LimitReader(stdout, maxOutputSize))
-	io.Copy(io.Discard, stdout) // drain remaining output to unblock the subprocess
-	wg.Wait()
-
-	if err := cmd.Wait(); err != nil {
-		errMsg := string(stderrBytes)
-		if errMsg == "" {
-			var errOutput *exec.ExitError
-			if errors.As(err, &errOutput) {
-				errMsg = string(errOutput.Stderr)
-			} else {
-				errMsg = err.Error()
-			}
+		var errOutput *exec.ExitError
+		if errors.As(err, &errOutput) {
+			stderr = string(errOutput.Stderr)
 		}
-		return nil, fmt.Errorf("failed to execute: %q: %s", strings.Join(cmd.Args, " "), errMsg)
+
+		return nil, fmt.Errorf("failed to execute: %q: %s", strings.Join(cmd.Args, " "), stderr)
 	}
 	return output, nil
 }
