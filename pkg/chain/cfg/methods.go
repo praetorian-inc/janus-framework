@@ -53,14 +53,31 @@ func (m *MethodsImpl) ExecuteCmd(cmd *exec.Cmd, lineparser func(string)) error {
 
 	processOutput := func(input io.Reader, buffer *bytes.Buffer) {
 		defer wg.Done()
-		scanner := bufio.NewScanner(input)
-		scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
-		for scanner.Scan() {
-			buffer.WriteString(scanner.Text())
-			lineparser(scanner.Text())
-		}
-		if scanner.Err() != nil {
-			slog.Error("failed to read output", "error", scanner.Err())
+		reader := bufio.NewReaderSize(input, 4*1024*1024) // 4MB line limit
+		for {
+			line, isPrefix, err := reader.ReadLine()
+			if err != nil {
+				if err != io.EOF {
+					slog.Error("failed to read output", "error", err)
+				}
+				return
+			}
+
+			if isPrefix {
+				// Line exceeded 4MB, drain the rest and skip it
+				slog.Warn("skipping oversized output line")
+				for isPrefix {
+					_, isPrefix, err = reader.ReadLine()
+					if err != nil {
+						return
+					}
+				}
+				continue
+			}
+
+			text := string(line)
+			buffer.WriteString(text)
+			lineparser(text)
 		}
 	}
 
